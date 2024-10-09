@@ -285,9 +285,18 @@ public class PostgresSnapshotChangeEventSource extends RelationalSnapshotChangeE
             return "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ; \n" + snapSet;
         }
 
-        // TODO should this customizable?
-
-        // we're using the same isolation level that pg_backup uses
+        final PostgresConnectorConfig.SnapshotIsolationMode isolationMode = connectorConfig.getSnapshotIsolationMode();
+        if (isolationMode == PostgresConnectorConfig.SnapshotIsolationMode.REPEATABLE_READ) {
+            return "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY;";
+        }
+        if (isolationMode == PostgresConnectorConfig.SnapshotIsolationMode.READ_COMMITTED) {
+            return "SET TRANSACTION ISOLATION LEVEL READ COMMITTED, READ ONLY;";
+        }
+        if (isolationMode == PostgresConnectorConfig.SnapshotIsolationMode.READ_UNCOMMITTED) {
+            return "SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED, READ ONLY;";
+        }
+        // DEFERRABLE only takes affect for READY ONLY and SERIALIZABLE
+        // https://www.postgresql.org/docs/current/sql-set-transaction.html
         return "SET TRANSACTION ISOLATION LEVEL SERIALIZABLE, READ ONLY, DEFERRABLE;";
     }
 

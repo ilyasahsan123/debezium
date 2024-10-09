@@ -4457,10 +4457,13 @@ public class OracleConnectorIT extends AbstractConnectorTest {
                     .with(OracleConnectorConfig.TABLE_INCLUDE_LIST, "DEBEZIUM\\.DBZ5441")
                     .build();
 
+            int waitTime = TestHelper.defaultMessageConsumerPollTimeout() * 2;
+
             final LogInterceptor streamInterceptor;
             switch (TestHelper.getAdapter(config)) {
                 case XSTREAM:
                     streamInterceptor = new LogInterceptor("io.debezium.connector.oracle.xstream.LcrEventHandler");
+                    waitTime *= 2; // XStream on CI can be quite slow, double the wait time to avoid failure
                     break;
                 default:
                     streamInterceptor = new LogInterceptor(AbstractLogMinerEventProcessor.class);
@@ -4479,7 +4482,7 @@ public class OracleConnectorIT extends AbstractConnectorTest {
             connection.execute("INSERT INTO DEBEZIUM.DBZ5441 (id,lvl) values (1,1)");
 
             Awaitility.await()
-                    .atMost(180, TimeUnit.SECONDS)
+                    .atMost(waitTime, TimeUnit.SECONDS)
                     .until(() -> streamInterceptor.containsMessage("is not a relational table and will be skipped"));
 
             assertNoRecordsToConsume();
@@ -5543,6 +5546,9 @@ public class OracleConnectorIT extends AbstractConnectorTest {
                 // ignored
             }
 
+            // Assert connector did not fail
+            assertConnectorIsRunning();
+
             // Just concerned that every iteration has lag greater than deviation.
             stopConnector();
         }
@@ -5723,8 +5729,7 @@ public class OracleConnectorIT extends AbstractConnectorTest {
     }
 
     @Test
-    @FixFor("DBZ-4332")
-    @SkipWhenAdapterNameIs(value = SkipWhenAdapterNameIs.AdapterName.OLR, reason = "ROW_ID is not sent by this adapter")
+    @FixFor({ "DBZ-4332", "DBZ-7823" })
     public void shouldCaptureRowIdForDataChanges() throws Exception {
         TestHelper.dropTable(connection, "dbz4332");
         try {
@@ -5765,6 +5770,40 @@ public class OracleConnectorIT extends AbstractConnectorTest {
         }
         finally {
             TestHelper.dropTable(connection, "dbz4332");
+        }
+    }
+
+    @Test
+    @FixFor("DBZ-7831")
+    public void shouldStreamChangesForTableWithSingleQuote() throws Exception {
+        TestHelper.dropTable(connection, "\"debezium_test'\"");
+        try {
+            connection.execute("CREATE TABLE \"debezium_test'\"\n" +
+                    "(\n" +
+                    "    id NUMBER(10),\n" +
+                    "    first_name VARCHAR2(50),\n" +
+                    "    last_name VARCHAR2(50),\n" +
+                    "    PRIMARY KEY(ID)\n" +
+                    ")");
+            connection.execute("INSERT INTO \"debezium_test'\" (id,first_name,last_name) values (1,'Andy','Griffith')");
+            TestHelper.streamTable(connection, "\"debezium_test'\"");
+
+            Configuration config = TestHelper.defaultConfig()
+                    .with(OracleConnectorConfig.TABLE_INCLUDE_LIST, "DEBEZIUM\\.debezium_test'")
+                    .build();
+
+            start(OracleConnector.class, config);
+            assertConnectorIsRunning();
+            waitForStreamingRunning(TestHelper.CONNECTOR_NAME, TestHelper.SERVER_NAME);
+
+            connection.execute("INSERT INTO \"debezium_test'\" (id,first_name,last_name) values (2,'Elmer','Fudd')");
+
+            final SourceRecords sourceRecords = consumeRecordsByTopic(2);
+            final List<SourceRecord> records = sourceRecords.recordsForTopic("server1.DEBEZIUM.debezium_test_");
+            assertThat(records).hasSize(2);
+        }
+        finally {
+            TestHelper.dropTable(connection, "\"debezium_test'\"");
         }
     }
 

@@ -91,6 +91,7 @@ public abstract class RelationalSnapshotChangeEventSource<P extends Partition, O
     private final SnapshotProgressListener<P> snapshotProgressListener;
     protected final SnapshotterService snapshotterService;
     protected Queue<JdbcConnection> connectionPool;
+    private final TableId signalDataCollectionTableId;
 
     public RelationalSnapshotChangeEventSource(RelationalDatabaseConnectorConfig connectorConfig,
                                                MainConnectionProvidingConnectionFactory<? extends JdbcConnection> jdbcConnectionFactory,
@@ -106,6 +107,13 @@ public abstract class RelationalSnapshotChangeEventSource<P extends Partition, O
         this.clock = clock;
         this.snapshotProgressListener = snapshotProgressListener;
         this.snapshotterService = snapshotterService;
+
+        if (!Strings.isNullOrBlank(connectorConfig.getSignalingDataCollectionId())) {
+            this.signalDataCollectionTableId = TableId.parse(connectorConfig.getSignalingDataCollectionId());
+        }
+        else {
+            this.signalDataCollectionTableId = null;
+        }
     }
 
     @Override
@@ -230,6 +238,11 @@ public abstract class RelationalSnapshotChangeEventSource<P extends Partition, O
     }
 
     public Connection createSnapshotConnection() throws SQLException {
+
+        if (!jdbcConnection.isValid()) {
+            jdbcConnection.reconnect();
+        }
+
         Connection connection = jdbcConnection.connection();
         connection.setAutoCommit(false);
         return connection;
@@ -421,7 +434,13 @@ public abstract class RelationalSnapshotChangeEventSource<P extends Partition, O
                 lastSnapshotRecord(snapshotContext);
             }
 
-            SchemaChangeEvent event = getCreateTableEvent(snapshotContext, snapshotContext.tables.forTable(tableId));
+            final Table table = snapshotContext.tables.forTable(tableId);
+            if (table == null) {
+                throw new DebeziumException("Unable to find relational table model for '" + tableId +
+                        "', there may be an issue with your include/exclude list configuration.");
+            }
+
+            SchemaChangeEvent event = getCreateTableEvent(snapshotContext, table);
             if (HistorizedRelationalDatabaseSchema.class.isAssignableFrom(schema.getClass()) &&
                     ((HistorizedRelationalDatabaseSchema) schema).skipSchemaChangeEvent(event)) {
                 continue;
@@ -704,6 +723,11 @@ public abstract class RelationalSnapshotChangeEventSource<P extends Partition, O
      */
     private Optional<String> determineSnapshotSelect(RelationalSnapshotContext<P, O> snapshotContext, TableId tableId,
                                                      Map<DataCollectionId, String> snapshotSelectOverridesByTable) {
+        if (tableId.equals(signalDataCollectionTableId)) {
+            // Skip the signal data collection as data shouldn't be captured
+            return Optional.empty();
+        }
+
         String overriddenSelect = getSnapshotSelectOverridesByTable(tableId, snapshotSelectOverridesByTable);
         if (overriddenSelect != null) {
             return Optional.of(enhanceOverriddenSelect(snapshotContext, overriddenSelect, tableId));

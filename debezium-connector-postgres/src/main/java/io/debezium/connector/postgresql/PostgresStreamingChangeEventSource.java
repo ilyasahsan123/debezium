@@ -223,7 +223,7 @@ public class PostgresStreamingChangeEventSource implements StreamingChangeEventS
                 lsnFlushingAllowed = true;
             }
             else {
-                dispatcher.dispatchHeartbeatEvent(partition, offsetContext);
+                dispatcher.dispatchHeartbeatEventAlsoToIncrementalSnapshot(partition, offsetContext);
                 noMessageIterations++;
                 if (noMessageIterations >= THROTTLE_NO_MESSAGE_BEFORE_PAUSE) {
                     noMessageIterations = 0;
@@ -251,27 +251,30 @@ public class PostgresStreamingChangeEventSource implements StreamingChangeEventS
             throws SQLException, InterruptedException {
 
         final Lsn lsn = stream.lastReceivedLsn();
-
+        LOGGER.trace("Processing replication message {}", message);
         if (message.isLastEventForLsn()) {
             lastCompletelyProcessedLsn = lsn;
         }
 
         // Tx BEGIN/END event
         if (message.isTransactionalMessage()) {
+
+            offsetContext.updateWalPosition(lsn, lastCompletelyProcessedLsn, message.getCommitTime(), toLong(message.getTransactionId()),
+                    taskContext.getSlotXmin(connection),
+                    null,
+                    message.getOperation());
+
             if (!connectorConfig.shouldProvideTransactionMetadata()) {
                 LOGGER.trace("Received transactional message {}", message);
                 // Don't skip on BEGIN message as it would flush LSN for the whole transaction
                 // too early
                 if (message.getOperation() == Operation.COMMIT) {
                     commitMessage(partition, offsetContext, lsn);
+                    dispatcher.dispatchTransactionCommittedEvent(partition, offsetContext, message.getCommitTime());
                 }
                 return;
             }
 
-            offsetContext.updateWalPosition(lsn, lastCompletelyProcessedLsn, message.getCommitTime(), toLong(message.getTransactionId()),
-                    taskContext.getSlotXmin(connection),
-                    null,
-                    message.getOperation());
             if (message.getOperation() == Operation.BEGIN) {
                 dispatcher.dispatchTransactionStartedEvent(partition, toString(message.getTransactionId()), offsetContext, message.getCommitTime());
             }

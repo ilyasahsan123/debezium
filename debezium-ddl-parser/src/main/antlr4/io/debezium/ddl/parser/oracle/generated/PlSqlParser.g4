@@ -1511,7 +1511,7 @@ out_of_line_ref_constraint
     ;
 
 out_of_line_constraint
-    : ( (CONSTRAINT constraint_name)?
+    : ( ((CONSTRAINT | CONSTRAINTS) constraint_name)?
           ( UNIQUE '(' column_name (',' column_name)* ')'
           | PRIMARY KEY '(' column_name (',' column_name)* ')'
           | foreign_key_clause
@@ -1519,6 +1519,7 @@ out_of_line_constraint
           )
        )
       constraint_state?
+      parallel_clause?
     ;
 
 constraint_state
@@ -1979,12 +1980,22 @@ relational_table
           physical_properties?
           column_properties?
           table_partitioning_clauses?
-          segment_attributes_clause? // LogMiner-specific
+          logminer_relational_table_attributes? // LogMiner-specific
           (CACHE | NOCACHE)? (RESULT_CACHE '(' MODE (DEFAULT | FORCE) ')')?
           parallel_clause?
+          monitoring_nomonitoring?
           (ROWDEPENDENCIES | NOROWDEPENDENCIES)?
           (enable_disable_clause+)? row_movement_clause? logical_replication_clause? flashback_archive_clause? annotations_clause?
         ;
+
+logminer_relational_table_attributes
+    : logminer_relational_table_attribute logminer_relational_table_attribute*
+    ;
+
+logminer_relational_table_attribute
+    : segment_attributes_clause
+    | parallel_clause
+    ;
 
 relational_property
     : ( out_of_line_constraint
@@ -3080,7 +3091,7 @@ merge_table_partition
     ;
 
 modify_table_partition
-    : MODIFY (PARTITION partition_name
+    : MODIFY ((PARTITION | SUBPARTITION) partition_name
              ((ADD | DROP) list_values_clause)? (ADD range_subpartition_desc)? (REBUILD? UNUSABLE LOCAL INDEXES)? (shrink_clause)?
               | range_partitions)
     ;
@@ -3430,7 +3441,13 @@ column_definition
 
 column_default_value
     : constant
-    | expression;
+    | interval_default_value_expression
+    | expression
+    ;
+
+interval_default_value_expression
+    : '('? INTERVAL concatenation? interval_expression ')'?
+    ;
 
 virtual_column_definition
     : column_name (datatype (COLLATE collation_name)?)?
